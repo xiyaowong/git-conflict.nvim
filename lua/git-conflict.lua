@@ -25,7 +25,7 @@ local job = utils.job
 -----------------------------------------------------------------------------//
 -- - [ ] Fix traversal order of prev and next conflict commands.
 -- - [ ] Clear buffer mappings once a conflict is resolved.
--- - [ ] Support diff3 conflict style i.e. common ancestor
+-- - [x] Support diff3 conflict style i.e. common ancestor
 
 -----------------------------------------------------------------------------//
 -- Types
@@ -36,6 +36,7 @@ local job = utils.job
 --- @class ConflictHighlights
 --- @field current string
 --- @field incoming string
+--- @field ancestor string
 
 --- @class ConflictPosition
 --- @field incoming table
@@ -59,8 +60,10 @@ local SIDES = {
 }
 local CURRENT_HL = 'GitConflictCurrent'
 local INCOMING_HL = 'GitConflictIncoming'
+local ANCESTOR_HL = 'GitConflictAncestor'
 local CURRENT_LABEL_HL = 'GitConflictCurrentLabel'
 local INCOMING_LABEL_HL = 'GitConflictIncomingLabel'
+local ANCESTOR_LABEL_HL = 'GitConflictAncestorLabel'
 local PRIORITY = vim.highlight.priorities.user
 local NAMESPACE = api.nvim_create_namespace('git-conflict')
 local augroup_id = api.nvim_create_augroup('GitConflictCommands', { clear = true })
@@ -70,6 +73,7 @@ local sep = package.config:sub(1, 1)
 local conflict_start = '^<<<<<<<'
 local conflict_middle = '^======='
 local conflict_end = '^>>>>>>>'
+local conflict_ancestor = '^|||||||'
 -----------------------------------------------------------------------------//
 
 local config = {
@@ -78,6 +82,7 @@ local config = {
   highlights = {
     current = 'DiffText',
     incoming = 'DiffAdd',
+    ancestor = 'DiffDelete',
   },
 }
 
@@ -157,6 +162,9 @@ end
 ---@param range_end number
 ---@return number extmark_id
 local function hl_range(bufnr, hl, range_start, range_end)
+  if not range_start or not range_end then
+    return
+  end
   return api.nvim_buf_set_extmark(bufnr, NAMESPACE, range_start, 0, {
     hl_group = hl,
     hl_eol = true,
@@ -192,12 +200,16 @@ end
 local function set_highlights(highlights)
   local current_color = api.nvim_get_hl_by_name(highlights.current, true)
   local incoming_color = api.nvim_get_hl_by_name(highlights.incoming, true)
+  local ancestor_color = api.nvim_get_hl_by_name(highlights.ancestor, true)
   local current_label_bg = color.shade_color(current_color.background, -10)
   local incoming_label_bg = color.shade_color(incoming_color.background, -10)
+  local ancestor_label_bg = color.shade_color(ancestor_color.background, -10)
   api.nvim_set_hl(0, CURRENT_LABEL_HL, { background = current_color.background, bold = true })
   api.nvim_set_hl(0, INCOMING_LABEL_HL, { background = incoming_color.background, bold = true })
+  api.nvim_set_hl(0, ANCESTOR_LABEL_HL, { background = ancestor_color.background, bold = true })
   api.nvim_set_hl(0, CURRENT_HL, { background = current_label_bg })
   api.nvim_set_hl(0, INCOMING_HL, { background = incoming_label_bg })
+  api.nvim_set_hl(0, ANCESTOR_HL, { background = ancestor_label_bg })
 end
 
 ---Highlight each part of a git conflict i.e. the incoming changes vs the current/HEAD changes
@@ -227,6 +239,14 @@ local function highlight_conflicts(positions, lines)
       current = { label = curr_label_id, content = curr_id },
       incoming = { label = inc_label_id, content = inc_id },
     }
+    if not vim.tbl_isempty(position.ancestor) then
+      local ancestor_start = position.ancestor.range_start
+      local ancestor_end = position.ancestor.range_end
+      local ancestor_label = lines[ancestor_start + 1] .. ' (Base changes)'
+      local id = hl_range(bufnr, ANCESTOR_HL, ancestor_start + 1, ancestor_end + 1)
+      local label_id = draw_section_label(bufnr, ANCESTOR_LABEL_HL, ancestor_label, ancestor_start)
+      position.marks.ancestor = { label = label_id, content = id }
+    end
   end
 end
 
@@ -238,7 +258,7 @@ end
 ---@return table<number, boolean>
 local function detect_conflicts(lines)
   local positions = {}
-  local position, has_start, has_middle = nil, false, false
+  local position, has_start, has_middle, has_ancestor = nil, false, false, false
   for index, line in ipairs(lines) do
     local lnum = index - 1
     if line:match(conflict_start) then
@@ -247,14 +267,25 @@ local function detect_conflicts(lines)
         current = { range_start = lnum, content_start = lnum + 1 },
         middle = {},
         incoming = {},
+        ancestor = {},
       }
+    end
+    if has_start and line:match(conflict_ancestor) then
+      has_ancestor = true
+      position.ancestor.range_start = lnum
+      position.current.range_end = lnum - 1
+      position.current.content_end = lnum - 1
     end
     if has_start and line:match(conflict_middle) then
       has_middle = true
+      if has_ancestor then
+        position.ancestor.range_end = lnum - 1
+      else
+        position.current.range_end = lnum - 1
+        position.current.content_end = lnum - 1
+      end
       position.middle.range_start = lnum
       position.middle.range_end = lnum + 1
-      position.current.range_end = lnum - 1
-      position.current.content_end = lnum - 1
       position.incoming.range_start = lnum + 1
       position.incoming.content_start = lnum + 1
     end
@@ -263,7 +294,7 @@ local function detect_conflicts(lines)
       position.incoming.content_end = lnum - 1
       positions[#positions + 1] = position
 
-      position, has_start, has_middle = nil, false, false
+      position, has_start, has_middle, has_ancestor = nil, false, false, false
     end
   end
   return not vim.tbl_isempty(positions), positions
@@ -524,6 +555,7 @@ function M.choose(side)
   api.nvim_buf_set_lines(0, pos_start, pos_end, false, lines)
   api.nvim_buf_del_extmark(0, NAMESPACE, position.marks.incoming.label)
   api.nvim_buf_del_extmark(0, NAMESPACE, position.marks.current.label)
+  api.nvim_buf_del_extmark(0, NAMESPACE, position.marks.ancestor.label)
   parse_buffer(bufnr)
 end
 
