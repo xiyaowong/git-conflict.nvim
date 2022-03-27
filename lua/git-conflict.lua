@@ -231,15 +231,28 @@ local function draw_section_label(bufnr, hl_group, label, lnum)
   })
 end
 
+local function check_bg(name, value)
+  if not value then
+    vim.notify_once(
+      string.format([[%s doesn't have a background color]], name),
+      vim.log.levels.WARN,
+      { title = 'Git conflict' }
+    )
+  end
+  return value
+end
+
 ---Derive the colour of the section label highlights based on each sections highlights
 ---@param highlights ConflictHighlights
 local function set_highlights(highlights)
   local current_color = api.nvim_get_hl_by_name(highlights.current, true)
   local incoming_color = api.nvim_get_hl_by_name(highlights.incoming, true)
-  local current_label_bg = color.shade_color(current_color.background, -10)
-  local incoming_label_bg = color.shade_color(incoming_color.background, -10)
-  api.nvim_set_hl(0, CURRENT_LABEL_HL, { background = current_color.background, bold = true })
-  api.nvim_set_hl(0, INCOMING_LABEL_HL, { background = incoming_color.background, bold = true })
+  local current_bg = check_bg(highlights.current, current_color.background) or 4218238
+  local incoming_bg = check_bg(highlights.incoming, incoming_color.background) or 3229523
+  local current_label_bg = color.shade_color(current_bg, -10)
+  local incoming_label_bg = color.shade_color(incoming_bg, -10)
+  api.nvim_set_hl(0, CURRENT_LABEL_HL, { background = current_bg, bold = true })
+  api.nvim_set_hl(0, INCOMING_LABEL_HL, { background = incoming_bg, bold = true })
   api.nvim_set_hl(0, CURRENT_HL, { background = current_label_bg })
   api.nvim_set_hl(0, INCOMING_HL, { background = incoming_label_bg })
 end
